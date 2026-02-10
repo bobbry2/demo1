@@ -9,8 +9,6 @@ import { PDFFile, EditorTool, Annotation, Point, TextAlignment } from '../types'
 import { savePdfWithAnnotations } from '../services/pdfService';
 import { summarizeDocument } from '../services/geminiService';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.0.379/build/pdf.worker.mjs`;
-
 interface EditorProps {
   file: PDFFile;
   onClose: () => void;
@@ -39,41 +37,56 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<any>(null);
 
+  // Inizializzazione sicura di PDF.js
   useEffect(() => {
-    const loadPdf = async () => {
+    const initPdfJs = async () => {
       try {
+        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+          pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.4.168/build/pdf.worker.mjs`;
+        }
+        
         const loadingTask = pdfjsLib.getDocument({ data: file.data });
         const pdf = await loadingTask.promise;
         pdfDocRef.current = pdf;
         setNumPages(pdf.numPages);
         renderPage(0);
       } catch (err) {
-        console.error("PDF Loading Error:", err);
-        alert("Failed to load PDF. The file might be corrupted.");
+        console.error("Errore caricamento PDF:", err);
+        alert("Errore nel caricamento del PDF. Il file potrebbe essere danneggiato o non supportato.");
       }
     };
-    loadPdf();
+    initPdfJs();
   }, [file]);
 
   const renderPage = useCallback(async (pageIdx: number) => {
     if (!pdfDocRef.current || !canvasRef.current) return;
-    const page = await pdfDocRef.current.getPage(pageIdx + 1);
-    const viewport = page.getViewport({ scale: 1.5 });
-    const canvas = canvasRef.current;
-    const context = canvas.getContext('2d');
-    canvas.height = viewport.height;
-    canvas.width = viewport.width;
+    try {
+      const page = await pdfDocRef.current.getPage(pageIdx + 1);
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = canvasRef.current;
+      const context = canvas.getContext('2d');
+      if (!context) return;
 
-    if (overlayCanvasRef.current) {
-      overlayCanvasRef.current.height = viewport.height;
-      overlayCanvasRef.current.width = viewport.width;
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+
+      if (overlayCanvasRef.current) {
+        overlayCanvasRef.current.height = viewport.height;
+        overlayCanvasRef.current.width = viewport.width;
+      }
+
+      await page.render({ canvasContext: context, viewport }).promise;
+      drawAnnotations();
+    } catch (err) {
+      console.error("Errore rendering pagina:", err);
     }
-
-    await page.render({ canvasContext: context, viewport }).promise;
-    drawAnnotations();
   }, [annotations, currentPage]);
 
-  useEffect(() => { renderPage(currentPage); }, [currentPage, renderPage]);
+  useEffect(() => {
+    if (pdfDocRef.current) {
+      renderPage(currentPage);
+    }
+  }, [currentPage, renderPage]);
 
   const drawAnnotations = useCallback(() => {
     const canvas = overlayCanvasRef.current;
@@ -91,9 +104,11 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
 
       if (selectedId === ann.id) {
         ctx.shadowBlur = 10;
-        ctx.shadowColor = 'rgba(0,0,0,0.2)';
+        ctx.shadowColor = 'rgba(0,0,0,0.3)';
+        ctx.setLineDash([5, 5]);
       } else {
         ctx.shadowBlur = 0;
+        ctx.setLineDash([]);
       }
 
       if (ann.type === EditorTool.DRAW && ann.points) {
@@ -119,8 +134,9 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
       }
     });
 
-    // Drawing preview
+    // Preview del disegno corrente
     if (isDrawing && startPos) {
+      ctx.setLineDash([]);
       ctx.strokeStyle = currentColor;
       ctx.lineWidth = currentThickness;
       const lastPoint = currentPath[currentPath.length - 1];
@@ -158,10 +174,9 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
   const handleMouseDown = (e: React.MouseEvent) => {
     const pos = getMousePos(e);
     if (activeTool === EditorTool.POINTER) {
-      // Hit detection (basic)
       const hit = annotations.find(a => 
         a.pageIndex === currentPage && 
-        Math.abs(a.x - pos.x) < 20 && Math.abs(a.y - pos.y) < 20
+        Math.abs(a.x - pos.x) < 30 && Math.abs(a.y - pos.y) < 30
       );
       setSelectedId(hit ? hit.id : null);
       return;
@@ -172,7 +187,7 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
     setCurrentPath([pos]);
 
     if (activeTool === EditorTool.TEXT) {
-      const content = prompt("Enter text:");
+      const content = prompt("Inserisci testo:");
       if (content) {
         const newAnn: Annotation = {
           id: Math.random().toString(36).substr(2, 9),
@@ -240,6 +255,9 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
         text += content.items.map((it: any) => it.str).join(' ');
       }
       setSummary(await summarizeDocument(text));
+    } catch (err) {
+      console.error(err);
+      alert("Errore nella generazione del riassunto.");
     } finally { setIsSummarizing(false); }
   };
 
@@ -251,8 +269,8 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
       link.download = `pdfcraft_${file.name}`;
       link.click();
     } catch (error) {
-      console.error("Export failed:", error);
-      alert("Failed to save PDF. Please try again.");
+      console.error("Esportazione fallita:", error);
+      alert("Impossibile salvare il PDF. Riprova.");
     }
   };
 
@@ -260,37 +278,37 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
 
   return (
     <div className="h-screen flex flex-col bg-slate-100 overflow-hidden font-sans">
-      <header className="h-20 glass border-b flex items-center justify-between px-8 z-30">
+      <header className="h-20 glass border-b flex items-center justify-between px-8 z-30 shrink-0">
         <div className="flex items-center space-x-5">
           <button onClick={onClose} className="p-3 hover:bg-white rounded-2xl transition-all shadow-sm border border-transparent hover:border-slate-200">
             <X className="w-6 h-6 text-slate-600" />
           </button>
           <div className="flex flex-col">
-            <span className="text-lg font-bold text-slate-900 truncate max-w-[300px]">{file.name}</span>
-            <span className="text-xs text-blue-600 font-bold uppercase tracking-widest">Active Session</span>
+            <span className="text-lg font-bold text-slate-900 truncate max-w-[250px]">{file.name}</span>
+            <span className="text-xs text-blue-600 font-bold uppercase tracking-widest">Sessione Attiva</span>
           </div>
         </div>
         <div className="flex items-center space-x-4">
-          <button onClick={handleAISummary} disabled={isSummarizing} className="flex items-center px-6 py-3 bg-white text-slate-900 rounded-2xl hover:bg-slate-50 transition-all text-sm font-bold border border-slate-200 shadow-sm">
+          <button onClick={handleAISummary} disabled={isSummarizing} className="hidden md:flex items-center px-6 py-3 bg-white text-slate-900 rounded-2xl hover:bg-slate-50 transition-all text-sm font-bold border border-slate-200 shadow-sm">
             <Sparkles className={`w-4 h-4 mr-2 ${isSummarizing ? 'animate-pulse' : ''}`} />
-            {isSummarizing ? 'Analyzing...' : 'AI Insights'}
+            {isSummarizing ? 'Analisi...' : 'Riassunto AI'}
           </button>
           <button onClick={downloadModifiedPdf} className="flex items-center px-6 py-3 bg-blue-600 text-white rounded-2xl hover:bg-blue-700 transition-all text-sm font-bold shadow-xl shadow-blue-200">
             <Download className="w-4 h-4 mr-2" />
-            Export PDF
+            Esporta
           </button>
         </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-24 glass border-r flex flex-col items-center py-8 space-y-4 z-20 overflow-y-auto">
-          <ToolButton icon={<MousePointer2 />} label="Select" active={activeTool === EditorTool.POINTER} onClick={() => setActiveTool(EditorTool.POINTER)} />
-          <ToolButton icon={<Type />} label="Text" active={activeTool === EditorTool.TEXT} onClick={() => setActiveTool(EditorTool.TEXT)} />
-          <ToolButton icon={<PenTool />} label="Draw" active={activeTool === EditorTool.DRAW} onClick={() => setActiveTool(EditorTool.DRAW)} />
-          <ToolButton icon={<Minus />} label="Line" active={activeTool === EditorTool.LINE} onClick={() => setActiveTool(EditorTool.LINE)} />
-          <ToolButton icon={<Square />} label="Square" active={activeTool === EditorTool.SQUARE} onClick={() => setActiveTool(EditorTool.SQUARE)} />
-          <ToolButton icon={<Circle />} label="Circle" active={activeTool === EditorTool.CIRCLE} onClick={() => setActiveTool(EditorTool.CIRCLE)} />
-          <ToolButton icon={<Highlighter />} label="Mark" active={activeTool === EditorTool.HIGHLIGHT} onClick={() => setActiveTool(EditorTool.HIGHLIGHT)} />
+        <aside className="w-24 glass border-r flex flex-col items-center py-8 space-y-4 z-20 overflow-y-auto shrink-0">
+          <ToolButton icon={<MousePointer2 />} label="Seleziona" active={activeTool === EditorTool.POINTER} onClick={() => setActiveTool(EditorTool.POINTER)} />
+          <ToolButton icon={<Type />} label="Testo" active={activeTool === EditorTool.TEXT} onClick={() => setActiveTool(EditorTool.TEXT)} />
+          <ToolButton icon={<PenTool />} label="Disegna" active={activeTool === EditorTool.DRAW} onClick={() => setActiveTool(EditorTool.DRAW)} />
+          <ToolButton icon={<Minus />} label="Linea" active={activeTool === EditorTool.LINE} onClick={() => setActiveTool(EditorTool.LINE)} />
+          <ToolButton icon={<Square />} label="Quadrato" active={activeTool === EditorTool.SQUARE} onClick={() => setActiveTool(EditorTool.SQUARE)} />
+          <ToolButton icon={<Circle />} label="Cerchio" active={activeTool === EditorTool.CIRCLE} onClick={() => setActiveTool(EditorTool.CIRCLE)} />
+          <ToolButton icon={<Highlighter />} label="Evidenzia" active={activeTool === EditorTool.HIGHLIGHT} onClick={() => setActiveTool(EditorTool.HIGHLIGHT)} />
           
           <div className="w-12 h-[1px] bg-slate-200 my-4" />
           <div className="space-y-3">
@@ -303,8 +321,8 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
           </div>
         </aside>
 
-        <main className="flex-1 overflow-auto p-12 bg-slate-50 relative flex justify-center">
-          <div className="relative pdf-shadow transition-all duration-500">
+        <main className="flex-1 overflow-auto p-12 bg-slate-200/50 relative flex justify-center">
+          <div className="relative pdf-shadow transition-all duration-500 my-auto">
             <canvas ref={canvasRef} className="rounded-xl bg-white shadow-2xl" />
             <canvas 
               ref={overlayCanvasRef} 
@@ -315,31 +333,34 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
 
           <div className="fixed bottom-10 glass rounded-3xl px-8 py-4 flex items-center space-x-8 shadow-2xl border border-white">
              <button disabled={currentPage === 0} onClick={() => setCurrentPage(p => p - 1)} className="p-2 hover:bg-white rounded-xl disabled:opacity-30"><ChevronLeft /></button>
-             <span className="text-sm font-extrabold text-slate-800 tracking-tight">PAGE {currentPage + 1} / {numPages}</span>
+             <span className="text-sm font-extrabold text-slate-800 tracking-tight">PAGINA {currentPage + 1} / {numPages}</span>
              <button disabled={currentPage === numPages - 1} onClick={() => setCurrentPage(p => p + 1)} className="p-2 hover:bg-white rounded-xl disabled:opacity-30"><ChevronRight /></button>
           </div>
         </main>
 
-        <aside className="w-96 glass border-l flex flex-col p-8 z-20 overflow-y-auto">
-          <h2 className="text-xl font-black text-slate-900 mb-8 tracking-tighter uppercase">Properties</h2>
+        <aside className="hidden lg:flex w-96 glass border-l flex-col p-8 z-20 overflow-y-auto shrink-0">
+          <h2 className="text-xl font-black text-slate-900 mb-8 tracking-tighter uppercase">Proprietà</h2>
 
           <div className="space-y-10">
              {selectedAnnotation ? (
-               <section className="space-y-6">
+               <section className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Editing Object</h3>
-                    <button onClick={() => setAnnotations(prev => prev.filter(a => a.id !== selectedId))} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-all"><Trash2 className="w-4 h-4" /></button>
+                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Oggetto Selezionato</h3>
+                    <button onClick={() => {
+                        setAnnotations(prev => prev.filter(a => a.id !== selectedId));
+                        setSelectedId(null);
+                    }} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-all"><Trash2 className="w-4 h-4" /></button>
                   </div>
                   
                   {selectedAnnotation.type === EditorTool.TEXT && (
                     <div className="space-y-6">
                       <div className="space-y-2">
-                         <label className="text-[10px] font-bold text-slate-400 uppercase">Text Content</label>
+                         <label className="text-[10px] font-bold text-slate-400 uppercase">Testo</label>
                          <input type="text" value={selectedAnnotation.content || ''} onChange={(e) => updateSelected({content: e.target.value})} className="w-full p-4 rounded-2xl border text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none" />
                       </div>
                       <div className="grid grid-cols-2 gap-4">
                          <div className="space-y-2">
-                           <label className="text-[10px] font-bold text-slate-400 uppercase">Size</label>
+                           <label className="text-[10px] font-bold text-slate-400 uppercase">Dimensione</label>
                            <input type="number" value={selectedAnnotation.fontSize || 16} onChange={(e) => updateSelected({fontSize: parseInt(e.target.value)})} className="w-full p-4 rounded-2xl border text-sm font-medium" />
                          </div>
                          <div className="space-y-2">
@@ -352,7 +373,7 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
                          </div>
                       </div>
                       <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase">Alignment</label>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Allineamento</label>
                         <div className="flex bg-slate-100 p-1 rounded-2xl">
                            <button onClick={() => updateSelected({alignment: 'left'})} className={`flex-1 p-3 rounded-xl flex justify-center ${selectedAnnotation.alignment === 'left' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400'}`}><AlignLeft className="w-4 h-4" /></button>
                            <button onClick={() => updateSelected({alignment: 'center'})} className={`flex-1 p-3 rounded-xl flex justify-center ${selectedAnnotation.alignment === 'center' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400'}`}><AlignCenter className="w-4 h-4" /></button>
@@ -363,34 +384,30 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
                   )}
 
                   <div className="space-y-4">
-                     <label className="text-[10px] font-bold text-slate-400 uppercase">Stroke Thickness</label>
+                     <label className="text-[10px] font-bold text-slate-400 uppercase">Spessore Tratto</label>
                      <input type="range" min="1" max="20" value={selectedAnnotation.thickness} onChange={(e) => updateSelected({thickness: parseInt(e.target.value)})} className="w-full h-2 bg-slate-100 rounded-full appearance-none accent-blue-600" />
                   </div>
                </section>
              ) : (
                <section className="text-center py-20 bg-slate-50 rounded-[2rem] border-2 border-dashed border-slate-200">
-                  <p className="text-sm font-bold text-slate-400 px-10">Select an object or draw something new to view properties</p>
+                  <p className="text-sm font-bold text-slate-400 px-10">Seleziona un elemento o disegna qualcosa per vederne le proprietà</p>
                </section>
              )}
 
              <section className="space-y-4 pt-6 border-t">
                 <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center">
                   <Sparkles className="w-3 h-3 mr-2 text-indigo-500" />
-                  AI Summary
+                  Riassunto AI
                 </h3>
                 {summary ? (
                   <div className="p-6 bg-indigo-50/50 rounded-3xl border border-indigo-100 shadow-sm">
                     <p className="text-sm text-slate-700 leading-relaxed font-medium italic">{summary}</p>
-                    <button onClick={() => setSummary(null)} className="mt-4 text-[10px] text-indigo-600 font-black uppercase tracking-[0.2em] hover:opacity-70">Clear</button>
+                    <button onClick={() => setSummary(null)} className="mt-4 text-[10px] text-indigo-600 font-black uppercase tracking-[0.2em] hover:opacity-70">Pulisci</button>
                   </div>
                 ) : (
-                  <p className="text-xs text-slate-400 px-2 font-medium">Click "AI Insights" at the top to generate a summary.</p>
+                  <p className="text-xs text-slate-400 px-2 font-medium">Usa "Riassunto AI" per generare una panoramica del documento.</p>
                 )}
              </section>
-          </div>
-
-          <div className="mt-auto pt-8 border-t">
-            <p className="text-[10px] text-slate-400 text-center font-bold tracking-tight uppercase">PDFCraft Pro • v2.1.1-stable</p>
           </div>
         </aside>
       </div>
@@ -398,9 +415,8 @@ export const Editor: React.FC<EditorProps> = ({ file, onClose }) => {
   );
 };
 
-// Fix: Safely clone element by checking isValidElement and casting correctly for React.Node
 const ToolButton: React.FC<{ icon: React.ReactNode; label: string; active?: boolean; onClick: () => void; }> = ({ icon, label, active, onClick }) => (
-  <button onClick={onClick} className={`group flex flex-col items-center p-4 rounded-2xl transition-all w-16 ${active ? 'bg-blue-600 text-white shadow-2xl shadow-blue-200 scale-110' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-900'}`}>
+  <button onClick={onClick} className={`group flex flex-col items-center p-4 rounded-2xl transition-all w-16 shrink-0 ${active ? 'bg-blue-600 text-white shadow-2xl shadow-blue-200 scale-110' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-900'}`}>
     {React.isValidElement(icon) ? React.cloneElement(icon as React.ReactElement<any>, { className: 'w-6 h-6' }) : icon}
     <span className={`text-[8px] mt-2 font-black uppercase tracking-tighter ${active ? 'text-white' : 'text-slate-300 group-hover:text-slate-500'}`}>{label}</span>
   </button>

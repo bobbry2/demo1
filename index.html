@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="it">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDFCraft AI - Modern PDF Editor</title>
+    <title>PDFCraft AI - Editor PDF Moderno</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,6 +13,8 @@
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
         }
         .glass {
             background: rgba(255, 255, 255, 0.7);
@@ -22,27 +24,58 @@
         .pdf-shadow {
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
         }
-        canvas {
-            max-width: 100%;
-            height: auto;
+        #loading-screen {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: white;
+            z-index: 9999;
+            transition: opacity 0.3s ease-out;
         }
     </style>
 <script type="importmap">
 {
   "imports": {
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "react": "https://esm.sh/react@^19.2.4",
+    "react": "https://esm.sh/react@19.0.0",
+    "react-dom": "https://esm.sh/react-dom@19.0.0",
+    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.460.0",
+    "@google/genai": "https://esm.sh/@google/genai@1.40.0",
+    "pdf-lib": "https://esm.sh/pdf-lib@1.17.1",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@4.4.168",
+    "pdfjs-dist/build/pdf.worker.mjs": "https://esm.sh/pdfjs-dist@4.4.168/build/pdf.worker.mjs",
     "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
-    "@google/genai": "https://esm.sh/@google/genai@^1.40.0",
-    "pdf-lib": "https://esm.sh/pdf-lib@^1.17.1",
-    "pdfjs-dist": "https://esm.sh/pdfjs-dist@4.0.379",
-    "pdfjs-dist/build/pdf.worker.mjs": "https://esm.sh/pdfjs-dist@4.0.379/build/pdf.worker.mjs"
+    "react/": "https://esm.sh/react@^19.2.4/"
   }
 }
 </script>
 </head>
 <body>
+    <div id="loading-screen">
+        <div class="flex flex-col items-center gap-4">
+            <div class="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+            <p class="text-slate-500 font-medium animate-pulse">Inizializzazione PDFCraft...</p>
+        </div>
+    </div>
     <div id="root"></div>
+    <script type="module" src="index.tsx"></script>
+    <script>
+        // Rimuove la schermata di caricamento una volta che React è montato
+        window.addEventListener('DOMContentLoaded', () => {
+            const observer = new MutationObserver((mutations) => {
+                if (document.querySelector('#root').children.length > 0) {
+                    const loader = document.getElementById('loading-screen');
+                    if (loader) {
+                        loader.style.opacity = '0';
+                        setTimeout(() => loader.remove(), 300);
+                    }
+                    observer.disconnect();
+                }
+            });
+            observer.observe(document.getElementById('root'), { childList: true });
+        });
+    </script>
 </body>
 </html>
